@@ -18,3 +18,21 @@ paseo plugin reload <plugin-id>  # after edits
 ```
 
 Plugin IDs (`paseo-workspace-labels`, `paseo-workspace-tree`) are set in each `paseo-plugin.json`. Paseo stores plugin settings by ID, so keep IDs stable when moving folders.
+
+## Branches
+
+This repo is a fork of [ocnc/paseo-plugins](https://github.com/ocnc/paseo-plugins).
+
+- `main` mirrors `upstream/main`. Don't commit to it directly.
+- `dev` is where our own plugins and changes live. The local daemon runs plugins from a `dev` checkout.
+
+Pull upstream changes into both:
+
+```bash
+git fetch upstream
+git switch main && git merge --ff-only upstream/main && git push origin main
+git switch dev && git merge main && git push origin dev
+paseo plugin reload <plugin-id>
+```
+
+New plugins go in their own folder: `paseo plugin init "$PWD/<name>"`, then add a row to the table above.

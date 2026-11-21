@@ -10,13 +10,21 @@ import {
   type WorkspaceRef,
 } from "@getpaseo/plugin/client";
 import { copyText, Icon, Modal, TextInput, useToast } from "@getpaseo/plugin/client/ui";
-import { useCallback, useEffect, useState } from "react";
-import { shades } from "./colors";
+import { useCallback, useState } from "react";
+import { overlay, shades } from "./colors";
 import { Pressable, Text, View } from "react-native";
 
 type Colors = PluginSidebarViewProps["theme"]["colors"];
 
-const ARCHIVE_CONFIRM_MS = 3000;
+/** Work that archiving would remove with the worktree, as Paseo's own archive warning lists it. */
+interface ArchiveRisk {
+  additions: number;
+  deletions: number;
+  dirty: boolean;
+  unpushed: number;
+  /** Workspaces nested directly under this one; they move to the top level when it goes. */
+  children: number;
+}
 
 /** 204913 → "205k", 15642 → "15.6k": large diffs otherwise crowd out the title. */
 function compact(value: number): string {
@@ -30,6 +38,7 @@ function IconButton({
   label,
   color,
   hoverColor,
+  fill,
   onPress,
   onHover,
 }: {
@@ -37,6 +46,8 @@ function IconButton({
   label: string;
   color: string;
   hoverColor: string;
+  /** Background while not hovered, for the armed archive button. */
+  fill?: string;
   onPress: () => void;
   /** Tells the row the pointer is on a button, so the buttons stay put while it is. */
   onHover: (hovered: boolean) => void;
@@ -59,7 +70,7 @@ function IconButton({
       style={({ pressed }) => ({
         width: 22,
         height: 22,
-        backgroundColor: hovered ? hoverColor : undefined,
+        backgroundColor: hovered ? hoverColor : fill,
         borderRadius: 4,
         alignItems: "center",
         justifyContent: "center",
@@ -111,6 +122,7 @@ export function RowActions({
   showControls,
   inline,
   onMove,
+  childCount,
 }: {
   reference: WorkspaceRef;
   colors: Colors;
@@ -119,6 +131,8 @@ export function RowActions({
   /** Touch layouts have no hover, so the controls sit in the row permanently instead of floating. */
   inline: boolean;
   onMove: () => void;
+  /** Direct children in the tree, for the archive warning. */
+  childCount: number;
 }) {
   const paseo = usePaseo();
   const toast = useToast();
@@ -132,14 +146,8 @@ export function RowActions({
   }));
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [risk, setRisk] = useState<ArchiveRisk | null>(null);
   const [onButtons, setOnButtons] = useState(false);
-
-  useEffect(() => {
-    if (!confirmArchive) return;
-    const timer = setTimeout(() => setConfirmArchive(false), ARCHIVE_CONFIRM_MS);
-    return () => clearTimeout(timer);
-  }, [confirmArchive]);
 
   const handle = useCallback(() => paseo.workspaces.ref(reference), [paseo, reference]);
   const attempt = useCallback(
@@ -156,20 +164,31 @@ export function RowActions({
 
   const archive = useCallback(() => {
     setMenuOpen(false);
-    setConfirmArchive(false);
+    setRisk(null);
     void attempt(() => handle().archive(), "Could not archive", `Archived ${info?.title ?? "workspace"}`);
   }, [attempt, handle, info?.title]);
-  // One click arms it, a second within a few seconds archives, so a stray click costs nothing.
-  const archiveButton = useCallback(() => {
-    if (confirmArchive) archive();
-    else setConfirmArchive(true);
-  }, [confirmArchive, archive]);
+  // Archive lives only in the ⋮ menu: a one-click hover button made accidental archives too
+  // easy. A dialog first lists what would be lost (uncommitted changes, unpushed commits, as
+  // Paseo's own archive warning does) and any child workspaces that would lose their group.
+  const requestArchive = useCallback(async () => {
+    setMenuOpen(false);
+    let git = handle().current()?.gitRuntime ?? null;
+    if (!git) git = (await handle().refresh().catch(() => null))?.gitRuntime ?? null;
+    const additions = info?.additions ?? 0;
+    const deletions = info?.deletions ?? 0;
+    const dirty = !!git?.isDirty || additions + deletions > 0;
+    const unpushed = git?.aheadOfOrigin ?? 0;
+    if (dirty || unpushed > 0 || childCount > 0) {
+      setRisk({ additions, deletions, dirty, unpushed, children: childCount });
+    } else {
+      archive();
+    }
+  }, [handle, info?.additions, info?.deletions, childCount, archive]);
 
   const closeMenu = useCallback((open: boolean) => {
     setMenuOpen(open);
     if (!open) {
       setRenaming(null);
-      setConfirmArchive(false);
     }
   }, []);
 
@@ -193,28 +212,6 @@ export function RowActions({
       : null;
   const controls = (
     <>
-      {confirmArchive ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Confirm archive ${info.title}`}
-          onPress={archiveButton}
-          onHoverIn={() => setOnButtons(true)}
-          onHoverOut={() => setOnButtons(false)}
-          hitSlop={4}
-          style={{ paddingHorizontal: 4, height: 22, justifyContent: "center", borderRadius: 4 }}
-        >
-          <Text style={{ color: colors.statusDanger, fontSize: 11 }}>Archive?</Text>
-        </Pressable>
-      ) : (
-        <IconButton
-          name="Archive"
-          label={`Archive ${info.title}`}
-          color={colors.foregroundMuted}
-          hoverColor={shades(colors.foreground).button}
-          onPress={archiveButton}
-          onHover={setOnButtons}
-        />
-      )}
       <IconButton
         name="MoreVertical"
         label={`More actions for ${info.title}`}
@@ -234,7 +231,7 @@ export function RowActions({
         // the pointer and made hover flicker on and off.
         // Always at least as wide as the two buttons, so they never sit over the title and need
         // no opaque backing (which cannot match an unknown sidebar color).
-        <View style={{ position: "relative", minHeight: 18, minWidth: 46, alignItems: "flex-end", justifyContent: "center" }}>
+        <View style={{ position: "relative", minHeight: 18, minWidth: 24, alignItems: "flex-end", justifyContent: "center" }}>
           {diff ? (
             <Text style={{ fontSize: 11, lineHeight: 18, opacity: controlsVisible ? 0 : 1 }}>
               <Text style={{ color: colors.statusSuccess }}>+{diff.additions}</Text>{" "}
@@ -312,13 +309,50 @@ export function RowActions({
               {info.directory ? (
                 <MenuItem icon="Copy" label="Copy path" colors={colors} onPress={() => copy(info.directory, "path")} />
               ) : null}
-              {confirmArchive ? (
-                <MenuItem icon="Archive" label="Confirm archive" colors={colors} danger onPress={archive} />
-              ) : (
-                <MenuItem icon="Archive" label="Archive" colors={colors} danger onPress={() => setConfirmArchive(true)} />
-              )}
+              <MenuItem icon="Archive" label="Archive" colors={colors} danger onPress={() => void requestArchive()} />
             </>
           )}
+        </Modal.Content>
+      </Modal>
+
+      <Modal title={`Archive ${info.title}?`} open={risk !== null} onOpenChange={(open) => !open && setRisk(null)}>
+        <Modal.Content contentContainerStyle={{ padding: 16, gap: 12 }}>
+          {risk && (risk.dirty || risk.unpushed > 0) ? (
+            <Text style={{ color: colors.foreground, fontSize: 13 }}>
+              Archiving deletes this workspace's worktree, including work that is not on GitHub yet:
+            </Text>
+          ) : null}
+          <View style={{ gap: 4 }}>
+            {risk?.dirty ? (
+              <Text style={{ color: colors.foreground, fontSize: 13 }}>
+                {"• Uncommitted changes"}
+                {risk.additions + risk.deletions > 0 ? (
+                  <Text>
+                    {" ("}
+                    <Text style={{ color: colors.statusSuccess }}>+{compact(risk.additions)}</Text>{" "}
+                    <Text style={{ color: colors.statusDanger }}>−{compact(risk.deletions)}</Text>
+                    {")"}
+                  </Text>
+                ) : null}
+              </Text>
+            ) : null}
+            {risk && risk.unpushed > 0 ? (
+              <Text style={{ color: colors.foreground, fontSize: 13 }}>
+                {`• ${risk.unpushed} unpushed commit${risk.unpushed === 1 ? "" : "s"}`}
+              </Text>
+            ) : null}
+          </View>
+          {risk && risk.children > 0 ? (
+            <Text style={{ color: colors.foreground, fontSize: 13 }}>
+              {risk.children === 1
+                ? "Its child workspace will move to the top level."
+                : `Its ${risk.children} child workspaces will move to the top level.`}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8 }}>
+            <MenuItem icon="X" label="Cancel" colors={colors} onPress={() => setRisk(null)} />
+            <MenuItem icon="Archive" label="Archive" colors={colors} danger onPress={archive} />
+          </View>
         </Modal.Content>
       </Modal>
     </View>

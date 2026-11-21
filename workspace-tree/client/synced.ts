@@ -68,8 +68,13 @@ export function useSyncedSettings<V>(state: Synced<V>): {
     [flush],
   );
 
+  // Keep the last values seen while a reload is in flight; reporting none for that moment made
+  // moved workspaces and folded folders jump back and forth.
+  const lastSaved = useRef<V | null>(null);
+  if (state.status === "ready") lastSaved.current = state.values;
+  const saved = lastSaved.current;
+
   // Drop the local copy once the saved document matches, so changes from other devices show.
-  const saved = state.status === "ready" ? state.values : null;
   useEffect(() => {
     if (local === null || pending.current !== null || saved === null) return;
     if (JSON.stringify(saved) === JSON.stringify(local)) setLocal(null);

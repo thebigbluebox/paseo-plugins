@@ -22,3 +22,16 @@ export const treeParents = defineSettings({
     overrides: z.record(z.string(), z.string().nullable()).default({}),
   }),
 });
+
+/**
+ * The last parent links read from the daemon, kept on this device so the tree can draw families
+ * at once after an app restart instead of waiting on the daemon, then refresh quietly.
+ */
+export const parentsCache = defineSettings({
+  id: "parents-cache",
+  scope: "device",
+  version: 1,
+  schema: z.object({
+    parents: z.record(z.string(), z.string().nullable()).default({}),
+  }),
+});

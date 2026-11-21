@@ -23,5 +23,6 @@ export const workspacePullRequests = defineRpc({
   output: z.object({
     workspaces: z.record(z.string(), z.array(pullRequestSchema)),
     error: z.string().nullable(),
+    refreshedAt: z.string().nullable().default(null),
   }),
 });

@@ -1,0 +1,3 @@
+Six Gruvbox Material themes for Paseo: Dark and Light, each in medium, hard and soft contrast. They follow the default "material" look of sainnhe's Gruvbox Material extension for VS Code, now archived: warm grey-brown backgrounds, cream text, a sidebar the same color as the main surface, and the palette's olive green as the accent.
+
+Choose one in Settings > Appearance. The colors come from the extension's palette files (MIT license, by Sainnhe Park). Paseo derives status, diff, syntax and terminal colors from a theme's main colors, so code highlighting and terminal colors follow Paseo's own derivation rather than Gruvbox Material's exact syntax palette.

@@ -18,7 +18,7 @@ import {
   type DropTarget,
 } from "./drag";
 import { shades, unreadColor } from "./colors";
-import { nodeKey, useParents } from "./parents";
+import { confirmGone, nodeKey, useParents } from "./parents";
 import { RowActions } from "./actions";
 import { useSyncedSettings } from "./synced";
 import { PullRequestLine } from "./prs";
@@ -330,6 +330,7 @@ const WorkspaceNode = memo(function WorkspaceNode({
             showControls={showButtons}
             inline={view.layout.compact}
             onMove={pick}
+            childCount={node.children.length}
           />
         </Pressable>
         {selected ? (
@@ -636,7 +637,7 @@ export function WorkspaceTree(view: PluginSidebarViewProps) {
     groupBy: (workspace) => ({ key: workspace.project.key, title: workspace.projectDisplayName }),
   });
   const refs = useMemo(() => groups.flatMap((group) => group.items), [groups]);
-  const recorded = useParents(refs);
+  const { parents: recorded, ready: parentsReady } = useParents(refs);
 
   const parentsSync = useSyncedSettings(parentSettings);
   const layoutSync = useSyncedSettings(layoutSettings);
@@ -729,8 +730,47 @@ export function WorkspaceTree(view: PluginSidebarViewProps) {
   );
   const restore = useCallback((key: string) => saveParent(key, "recorded"), [saveParent]);
 
-  // Wait for saved state so folded folders and moved workspaces do not jump into place.
-  if (layoutSettings.status === "loading" || parentSettings.status === "loading") return null;
+  // Once per session, forget saved moves and folds for workspaces their host confirms no longer
+  // exist. A workspace that is only missing from a list (slow or offline host) keeps its state,
+  // so pruning can never make a family jump.
+  const pruned = useRef(false);
+  useEffect(() => {
+    if (pruned.current || !parentsReady || overrides === null || collapsedList === null) return;
+    const isWorkspaceKey = (key: string) => !key.startsWith("project:") && key.includes("/");
+    const candidates = new Set<string>();
+    for (const [key, parent] of Object.entries(overrides)) {
+      if (!recorded.has(key)) candidates.add(key);
+      if (parent && !recorded.has(parent)) candidates.add(parent);
+    }
+    for (const key of collapsedList) if (isWorkspaceKey(key) && !recorded.has(key)) candidates.add(key);
+    pruned.current = true;
+    if (candidates.size === 0) return;
+    void confirmGone([...candidates]).then((gone) => {
+      if (gone.size === 0) return;
+      const { overrides: currentOverrides, collapsedList: currentCollapsed } = latestPrune.current;
+      if (currentOverrides) {
+        const kept = Object.fromEntries(
+          Object.entries(currentOverrides).filter(([key, parent]) => !gone.has(key) && !(parent && gone.has(parent))),
+        );
+        if (Object.keys(kept).length !== Object.keys(currentOverrides).length) parentsSync.set({ overrides: kept });
+      }
+      if (currentCollapsed) {
+        const kept = currentCollapsed.filter((key) => !gone.has(key));
+        if (kept.length !== currentCollapsed.length) layoutSync.set({ collapsed: kept });
+      }
+    });
+  }, [parentsReady, overrides, collapsedList, recorded, parentsSync, layoutSync]);
+  const latestPrune = useRef({ overrides, collapsedList });
+  latestPrune.current = { overrides, collapsedList };
+
+  // Wait for saved state and parent links the first time only, so folded folders and families do
+  // not jump into place. After that keep drawing the last known tree: a settings reload (a save
+  // retry, a reconnect) used to blank the whole view for a moment.
+  const loaded = useRef(false);
+  if (layoutSettings.status !== "loading" && parentSettings.status !== "loading" && parentsReady) {
+    loaded.current = true;
+  }
+  if (!loaded.current) return null;
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 4 }}>

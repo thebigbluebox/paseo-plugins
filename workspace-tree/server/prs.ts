@@ -8,6 +8,9 @@
  */
 import type { PaseoApi } from "@getpaseo/client";
 import { execFile } from "node:child_process";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { PullRequest } from "../shared/prs";
 
@@ -111,6 +114,11 @@ function viewer(cwd: string): Promise<string | null> {
 }
 
 const repoCache = new Map<string, { at: number; byBranch: Promise<Map<string, GhPullRequest[]>> }>();
+/**
+ * The last answer GitHub gave per repository. GitHub's API times out now and then (HTTP 502/504);
+ * serving this instead of nothing keeps the chips from vanishing until the next refresh.
+ */
+const lastGood = new Map<string, Map<string, GhPullRequest[]>>();
 
 /**
  * Two queries, because asking GitHub for check results on every PR times out on busy repos:
@@ -147,9 +155,25 @@ function pullRequestsOf(repoRoot: string, refresh: boolean): Promise<Map<string,
     }
     return map;
   });
-  repoCache.set(repoRoot, { at: Date.now(), byBranch });
-  byBranch.catch(() => repoCache.delete(repoRoot));
-  return byBranch;
+  const served = byBranch.then(
+    (map) => {
+      lastGood.set(repoRoot, map);
+      return map;
+    },
+    (error: unknown) => {
+      // Retry on the next request rather than caching the failure.
+      repoCache.delete(repoRoot);
+      const previous = lastGood.get(repoRoot);
+      if (previous) {
+        const stderr = (error as { stderr?: string }).stderr?.trim();
+        console.error(`[workspace-tree] GitHub lookup failed, serving last good PRs: ${stderr || error}`);
+        return previous;
+      }
+      throw error;
+    },
+  );
+  repoCache.set(repoRoot, { at: Date.now(), byBranch: served });
+  return served;
 }
 
 function rank(pr: PullRequest): number {
@@ -157,10 +181,19 @@ function rank(pr: PullRequest): number {
   return pr.state === "open" ? 1 : 2;
 }
 
-export async function listWorkspacePullRequests(
+export interface PullRequestSnapshot {
+  workspaces: Record<string, PullRequest[]>;
+  error: string | null;
+  /** When GitHub was last read, ISO time; null before the first read. */
+  refreshedAt: string | null;
+}
+
+/** Reads every workspace's PRs from GitHub. A workspace whose lookup fails keeps `previous`. */
+async function readFromGitHub(
   paseo: PaseoApi,
   refresh: boolean,
-): Promise<{ workspaces: Record<string, PullRequest[]>; error: string | null }> {
+  previous: PullRequestSnapshot | null,
+): Promise<PullRequestSnapshot> {
   const workspaces: Array<{ id: string; cwd: string }> = [];
   let cursor: string | undefined;
   do {
@@ -213,9 +246,98 @@ export async function listWorkspacePullRequests(
         const stderr = (error as { stderr?: string }).stderr?.trim();
         const message = stderr || (error instanceof Error ? error.message.split("\n")[0] : String(error));
         errors.add(message);
+        // Keep what this workspace showed before rather than dropping its chips.
+        const kept = previous?.workspaces[id];
+        if (kept) result[id] = kept;
         console.error(`[workspace-tree] PR lookup failed for ${cwd}: ${message}`);
       }
     }),
   );
-  return { workspaces: result, error: errors.size ? [...errors][0] : null };
+  return {
+    workspaces: result,
+    error: errors.size ? [...errors][0] : null,
+    refreshedAt: new Date().toISOString(),
+  };
+}
+
+/*
+ * The sidebar never waits on GitHub. Each request gets the latest snapshot at once, and a stale
+ * snapshot starts one background refresh. The snapshot is written to disk, so a plugin reload or
+ * daemon restart starts from the last answer instead of blank chips. Before this, every restart
+ * and every GitHub timeout showed no PRs until a full lookup (about 5 seconds) succeeded.
+ */
+const STALE_MS = 60_000;
+/*
+ * Kept in this plugin's folder under the daemon home, which Paseo deletes when the plugin is
+ * removed, so uninstalling leaves nothing behind. Not a .json name, so it is never taken for a
+ * settings document. Older builds used ~/.cache/paseo-workspace-tree; that copy is removed.
+ */
+const PLUGIN_ID = "paseo-workspace-tree";
+const CACHE_DIR = join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "plugin-settings", PLUGIN_ID);
+const CACHE_FILE = join(CACHE_DIR, "pull-requests.cache");
+const LEGACY_CACHE_DIR = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), PLUGIN_ID);
+
+let snapshot: PullRequestSnapshot | null = null;
+let loaded: Promise<void> | null = null;
+let refreshing: Promise<PullRequestSnapshot> | null = null;
+
+/** Removes the old cache location and any temporary file a crash left mid-save. */
+async function removeLeftovers(): Promise<void> {
+  await rm(LEGACY_CACHE_DIR, { recursive: true, force: true }).catch(() => undefined);
+  const names = await readdir(CACHE_DIR).catch(() => [] as string[]);
+  await Promise.all(
+    names
+      .filter((name) => name.startsWith("pull-requests.cache.") && name.endsWith(".tmp"))
+      .map((name) => rm(join(CACHE_DIR, name), { force: true }).catch(() => undefined)),
+  );
+}
+
+function loadFromDisk(): Promise<void> {
+  loaded ??= removeLeftovers()
+    .then(() => readFile(CACHE_FILE, "utf8"))
+    .then((text) => {
+      const saved = JSON.parse(text) as PullRequestSnapshot;
+      if (saved && typeof saved.workspaces === "object") snapshot ??= saved;
+    })
+    .catch(() => undefined);
+  return loaded;
+}
+
+async function saveToDisk(value: PullRequestSnapshot): Promise<void> {
+  try {
+    await mkdir(CACHE_DIR, { recursive: true });
+    const temporary = `${CACHE_FILE}.${process.pid}.tmp`;
+    await writeFile(temporary, JSON.stringify(value));
+    await rename(temporary, CACHE_FILE);
+  } catch (error) {
+    console.error("[workspace-tree] Could not save the PR snapshot", error);
+  }
+}
+
+function startRefresh(paseo: PaseoApi, force: boolean): Promise<PullRequestSnapshot> {
+  refreshing ??= readFromGitHub(paseo, force, snapshot)
+    .then((fresh) => {
+      snapshot = fresh;
+      void saveToDisk(fresh);
+      return fresh;
+    })
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
+}
+
+export async function listWorkspacePullRequests(
+  paseo: PaseoApi,
+  refresh: boolean,
+): Promise<PullRequestSnapshot> {
+  await loadFromDisk();
+  const age = snapshot?.refreshedAt ? Date.now() - Date.parse(snapshot.refreshedAt) : Infinity;
+  if (refresh || age > STALE_MS) {
+    const pending = startRefresh(paseo, refresh);
+    // Only the very first lookup, with nothing saved, has to wait.
+    if (!snapshot) return pending;
+    pending.catch((error) => console.error("[workspace-tree] Background PR refresh failed", error));
+  }
+  return snapshot!;
 }

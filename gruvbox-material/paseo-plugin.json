@@ -1,0 +1,9 @@
+{
+  "id": "paseo-gruvbox-material",
+  "name": "Gruvbox Material",
+  "description": "Gruvbox Material dark and light themes, in hard, medium and soft contrast",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.16.0"
+  }
+}

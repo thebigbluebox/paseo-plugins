@@ -1,8 +1,9 @@
 import type { PluginSidebarViewProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/ui";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { shades } from "./colors";
+import { Popover } from "./popover";
 
 type Colors = PluginSidebarViewProps["theme"]["colors"];
 
@@ -20,7 +21,7 @@ function toggle(list: string[], key: string): string[] {
   return list.includes(key) ? list.filter((item) => item !== key) : [...list, key];
 }
 
-function OptionRow({
+export function OptionRow({
   option,
   checked,
   onPress,
@@ -58,7 +59,7 @@ function OptionRow({
   );
 }
 
-function Heading({ children, colors }: { children: string; colors: Colors }) {
+export function Heading({ children, colors }: { children: string; colors: Colors }) {
   return (
     <Text
       style={{
@@ -76,14 +77,16 @@ function Heading({ children, colors }: { children: string; colors: Colors }) {
 }
 
 /**
- * The tree's filter: a button at the top that opens a panel of hosts and projects to tick.
- * Nothing ticked in a list means all of it. The host list shows only with several hosts.
+ * The tree's filter: a small button that sits on the right of the first project's header and
+ * opens a popover (a sheet on phones) of hosts and projects to tick. Nothing ticked in a list
+ * means all of it. The host list shows only with several hosts.
  */
-export function FilterBar({
+export function FilterButton({
   value,
   onChange,
   hosts,
   projects,
+  compact,
   colors,
 }: {
   value: TreeFilterValue;
@@ -91,97 +94,84 @@ export function FilterBar({
   hosts: FilterOption[];
   /** Projects on the hosts shown, so the list follows the host choice. */
   projects: FilterOption[];
+  compact: boolean;
   colors: Colors;
 }) {
   const [open, setOpen] = useState(false);
+  const anchor = useRef<View>(null);
   const shade = shades(colors.foreground);
-  const hostNames = hosts.filter((host) => value.hosts.includes(host.key)).map((host) => host.label);
-  const projectNames = projects.filter((project) => value.projects.includes(project.key)).map((project) => project.label);
-  const active = value.hosts.length > 0 || value.projects.length > 0;
-  const summary = [...hostNames, ...projectNames].join(", ");
+  const ticked = value.hosts.length + value.projects.length;
+  const tint = ticked ? colors.accent : colors.foregroundMuted;
 
   return (
-    <View style={{ paddingHorizontal: 6, paddingBottom: 2 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 24 }}>
-        <Text style={{ color: colors.foregroundMuted, fontSize: 11, flex: 1, paddingLeft: 4 }} numberOfLines={1}>
-          {active ? summary || "Filtered" : ""}
-        </Text>
-        {active ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Clear filter"
-            onPress={() => onChange({ hosts: [], projects: [] })}
-            hitSlop={6}
-          >
-            <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>Clear</Text>
-          </Pressable>
-        ) : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={open ? "Close filter" : "Filter by host or project"}
-          accessibilityState={{ expanded: open }}
-          onPress={() => setOpen((value) => !value)}
-          hitSlop={6}
-          style={({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) => ({
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 4,
-            height: 22,
-            paddingHorizontal: 6,
-            borderRadius: 5,
-            backgroundColor: pressed || open ? shade.pressed : hovered ? shade.hover : "transparent",
-          })}
-        >
-          <Icon name="ListFilter" size={13} color={active ? colors.accent : colors.foregroundMuted} />
-          <Text style={{ color: active ? colors.accent : colors.foregroundMuted, fontSize: 11, fontWeight: "500" }}>
-            Filter
-          </Text>
-        </Pressable>
-      </View>
-
-      {open ? (
-        <View
-          style={{
-            marginTop: 2,
-            marginBottom: 4,
-            paddingVertical: 4,
-            borderRadius: 8,
-            borderWidth: 1,
-            borderColor: shade.line,
-          }}
-        >
-          {hosts.length > 1 ? (
-            <>
-              <Heading colors={colors}>Hosts</Heading>
-              {hosts.map((host) => (
-                <OptionRow
-                  key={host.key}
-                  option={host}
-                  checked={value.hosts.includes(host.key)}
-                  onPress={() => onChange({ ...value, hosts: toggle(value.hosts, host.key) })}
-                  colors={colors}
-                />
-              ))}
-            </>
-          ) : null}
-          <Heading colors={colors}>Projects</Heading>
-          {projects.length === 0 ? (
-            <Text style={{ color: colors.foregroundMuted, fontSize: 12, paddingHorizontal: 8, paddingVertical: 4 }}>
-              No projects
-            </Text>
-          ) : (
-            projects.map((project) => (
+    <>
+      <Pressable
+        ref={anchor}
+        accessibilityRole="button"
+        accessibilityLabel={ticked ? `Filter, ${ticked} selected` : "Filter by host or project"}
+        onPress={() => setOpen(true)}
+        hitSlop={6}
+        style={({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 3,
+          height: 20,
+          paddingHorizontal: 5,
+          borderRadius: 5,
+          backgroundColor: pressed || open ? shade.pressed : hovered ? shade.hover : "transparent",
+        })}
+      >
+        <Icon name="ListFilter" size={13} color={tint} />
+        {ticked ? <Text style={{ color: tint, fontSize: 11, fontWeight: "600" }}>{ticked}</Text> : null}
+      </Pressable>
+      <Popover
+        anchor={anchor}
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Filter"
+        compact={compact}
+        colors={colors}
+      >
+        {hosts.length > 1 ? (
+          <>
+            <Heading colors={colors}>Hosts</Heading>
+            {hosts.map((host) => (
               <OptionRow
-                key={project.key}
-                option={project}
-                checked={value.projects.includes(project.key)}
-                onPress={() => onChange({ ...value, projects: toggle(value.projects, project.key) })}
+                key={host.key}
+                option={host}
+                checked={value.hosts.includes(host.key)}
+                onPress={() => onChange({ ...value, hosts: toggle(value.hosts, host.key) })}
                 colors={colors}
               />
-            ))
-          )}
-        </View>
-      ) : null}
-    </View>
+            ))}
+          </>
+        ) : null}
+        <Heading colors={colors}>Projects</Heading>
+        {projects.length === 0 ? (
+          <Text style={{ color: colors.foregroundMuted, fontSize: 12, paddingHorizontal: 8, paddingVertical: 4 }}>
+            No projects
+          </Text>
+        ) : (
+          projects.map((project) => (
+            <OptionRow
+              key={project.key}
+              option={project}
+              checked={value.projects.includes(project.key)}
+              onPress={() => onChange({ ...value, projects: toggle(value.projects, project.key) })}
+              colors={colors}
+            />
+          ))
+        )}
+        {ticked ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => onChange({ hosts: [], projects: [] })}
+            style={{ paddingHorizontal: 8, paddingTop: 8, paddingBottom: 4 }}
+          >
+            <Text style={{ color: colors.accent, fontSize: 12 }}>Clear filter</Text>
+          </Pressable>
+        ) : null}
+      </Popover>
+    </>
   );
 }

@@ -8,10 +8,14 @@ import {
   type PluginSidebarViewProps,
   type WorkspaceRef,
 } from "@getpaseo/plugin/client";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { treeFilter, treeLayout, treeParents } from "../shared/preferences";
-import { FilterBar, type FilterOption, type TreeFilterValue } from "./filter";
+import { FilterButton, type FilterOption, type TreeFilterValue } from "./filter";
+import { CountBadge } from "./badge";
+import { INDENT, ROW_HEIGHT, TITLE_LINE, TITLE_SIZE, titleLine } from "./metrics";
+import { Meters } from "./meters";
+import { ReviewsPanel } from "./reviews";
 import {
   DragController,
   useDragHandlers,
@@ -25,13 +29,6 @@ import { RowActions } from "./actions";
 import { useSyncedSettings } from "./synced";
 import { PullRequestLine } from "./prs";
 
-// macOS / VS Code sidebar sizing: 13pt titles on an 18pt line, 11pt secondary text and headings.
-const INDENT = 14;
-const ROW_HEIGHT = 26;
-const TITLE_SIZE = 13;
-const TITLE_LINE = 18;
-/** Box matching the title's first line (4pt padding + 18pt line), for items that sit beside it. */
-const titleLine = { height: TITLE_LINE, marginTop: 4, justifyContent: "center", alignItems: "center" } as const;
 const projectKey = (groupKey: string) => `project:${groupKey}`;
 const HOVER_GRACE_MS = 100;
 
@@ -363,23 +360,26 @@ const WorkspaceNode = memo(function WorkspaceNode({
           {node.children.map((child) => (
             <WorkspaceNode key={child.key} node={child} depth={depth + 1} context={context} />
           ))}
-          {/* Guide line linking children to their parent, like an editor's file tree. Drawn after
-              the rows so a hovered or selected row's background cannot cover it. It is
-              brighter for the family holding the open workspace, as VS Code does. */}
-          <View
-            pointerEvents="none"
-            style={{
-              position: "absolute",
-              zIndex: 1,
-              left: indent + 8,
-              top: 0,
-              bottom: 4,
-              width: 1,
-              backgroundColor: colors.foregroundMuted,
-              opacity: containsActive(node, view.active.workspace?.key) ? 0.9 : 0.55,
-            }}
-          />
         </View>
+      ) : null}
+      {/* Guide line linking children to their parent, like an editor's file tree. It starts just
+          under the parent's arrow, so it comes out of the parent even when PR lines make the
+          parent's row tall. Drawn after the rows so a hovered or selected row's background cannot
+          cover it, and brighter for the family holding the open workspace, as VS Code does. */}
+      {open && node.children.length > 0 ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            zIndex: 1,
+            left: indent + 8,
+            top: titleLine.marginTop + TITLE_LINE + 2,
+            bottom: 4,
+            width: 1,
+            backgroundColor: colors.foregroundMuted,
+            opacity: containsActive(node, view.active.workspace?.key) ? 0.9 : 0.55,
+          }}
+        />
       ) : null}
     </View>
   );
@@ -390,11 +390,14 @@ function ProjectSection({
   forest,
   context,
   first,
+  trailing,
 }: {
   group: Group<WorkspaceRef>;
   forest: TreeNode[];
   context: TreeContext;
   first: boolean;
+  /** Beside the header, outside its press area: the tree's Filter button on the first project. */
+  trailing?: ReactNode;
 }) {
   const { view, layout, controller } = context;
   const { colors } = view.theme;
@@ -422,7 +425,7 @@ function ProjectSection({
           : { marginTop: 6, paddingTop: 4, borderTopWidth: 1, borderTopColor: shades(colors.foreground).line }),
       }}
     >
-      <View ref={register}>
+      <View ref={register} style={{ flexDirection: "row", alignItems: "center" }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={
@@ -431,6 +434,7 @@ function ProjectSection({
           accessibilityState={drag.picking ? undefined : { expanded: open }}
           onPress={press}
           style={{
+            flex: 1,
             minHeight: ROW_HEIGHT,
             flexDirection: "row",
             alignItems: "center",
@@ -450,7 +454,7 @@ function ProjectSection({
             accessibilityRole="header"
             numberOfLines={1}
             style={{
-              flex: 1,
+              flexShrink: 1,
               color: colors.foregroundMuted,
               fontSize: 11,
               fontWeight: "600",
@@ -460,12 +464,14 @@ function ProjectSection({
           >
             {title}
           </Text>
-          {drag.picking ? (
-            <Text style={{ color: colors.accent, fontSize: 11 }}>Top level</Text>
-          ) : !open ? (
-            <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>{group.items.length}</Text>
+          {/* A folded project's count sits by its name, so nothing on the right has to line up. */}
+          {!open && !drag.picking ? (
+            <CountBadge count={group.items.length} colors={colors} label={`${group.items.length} workspaces`} />
           ) : null}
+          <View style={{ flex: 1 }} />
+          {drag.picking ? <Text style={{ color: colors.accent, fontSize: 11 }}>Top level</Text> : null}
         </Pressable>
+        {trailing ? <View style={{ marginTop: 2, paddingRight: 4 }}>{trailing}</View> : null}
       </View>
       {open
         ? forest.map((node) =>
@@ -793,6 +799,24 @@ export function WorkspaceTree(view: PluginSidebarViewProps) {
   const latestPrune = useRef({ overrides, collapsedList });
   latestPrune.current = { overrides, collapsedList };
 
+  const compact = view.layout.compact;
+  const panels = (
+    <>
+      <ReviewsPanel colors={view.theme.colors} compact={compact} />
+      <Meters colors={view.theme.colors} workspace={view.active.workspace} agent={view.active.agent} />
+    </>
+  );
+  const filterButton = (
+    <FilterButton
+      value={filter}
+      onChange={filterSync.set}
+      hosts={hostOptions}
+      projects={projectOptions}
+      compact={view.layout.compact}
+      colors={view.theme.colors}
+    />
+  );
+
   // Wait for saved state and parent links the first time only, so folded folders and families do
   // not jump into place. After that keep drawing the last known tree: a settings reload (a save
   // retry, a reconnect) used to blank the whole view for a moment.
@@ -808,14 +832,12 @@ export function WorkspaceTree(view: PluginSidebarViewProps) {
   if (!loaded.current) return null;
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 4 }}>
-      <FilterBar
-        value={filter}
-        onChange={filterSync.set}
-        hosts={hostOptions}
-        projects={projectOptions}
-        colors={view.theme.colors}
-      />
+    <View style={{ flex: 1 }}>
+    <ScrollView
+      style={{ flex: 1 }}
+      // Room at the end on phones, where Paseo's footer may sit over the bottom of the view.
+      contentContainerStyle={{ paddingTop: 4, paddingBottom: compact ? 96 : 4 }}
+    >
       <PickBanner context={context} placements={placements} overrides={overrides} restore={restore} />
       <SettingsProblem
         what="workspace moves"
@@ -830,19 +852,29 @@ export function WorkspaceTree(view: PluginSidebarViewProps) {
         colors={view.theme.colors}
       />
       {groups.length === 0 ? (
-        <Text style={{ color: view.theme.colors.foregroundMuted, fontSize: 12, padding: 12 }}>
-          {filter.hosts.length || filter.projects.length ? "No workspaces match the filter." : "No workspaces yet."}
-        </Text>
+        // No project header to sit in, so the Filter button goes beside the message.
+        <View style={{ flexDirection: "row", alignItems: "center", paddingLeft: 12, paddingRight: 4 }}>
+          <Text style={{ color: view.theme.colors.foregroundMuted, fontSize: 12, paddingVertical: 12, flex: 1 }}>
+            {filter.hosts.length || filter.projects.length ? "No workspaces match the filter." : "No workspaces yet."}
+          </Text>
+          {filterButton}
+        </View>
       ) : null}
       {groups.map((group, index) => (
         <ProjectSection
           key={group.key}
           first={index === 0}
+          trailing={index === 0 ? filterButton : undefined}
           group={group}
           forest={forests.get(group.key) ?? []}
           context={context}
         />
       ))}
+      {/* Phones: the last items of the list, reachable by scrolling whatever height the view gets. */}
+      {compact ? panels : null}
     </ScrollView>
+    {/* Desktop: pinned under the tree. PRs waiting for you, then context and plan usage. */}
+    {compact ? null : panels}
+    </View>
   );
 }

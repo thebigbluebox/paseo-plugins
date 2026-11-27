@@ -56,8 +56,11 @@ interface Badge {
  * CI and merge conflicts as separate badges, so a PR that fails CI and conflicts shows both.
  * A single icon used to show only the conflict, and bare symbols were hard to tell apart.
  */
-function badges(pr: PullRequest, colors: Colors): Badge[] {
-  if (pr.state !== "open") return [];
+/** The PR fields the badges read; a review item supplies the same ones. */
+type BadgeSource = Pick<PullRequest, "checks" | "conflicting" | "review"> & { state?: PullRequest["state"] };
+
+function badges(pr: BadgeSource, colors: Colors): Badge[] {
+  if (pr.state && pr.state !== "open") return [];
   const list: Badge[] = [];
   switch (pr.checks) {
     case "failure":
@@ -122,6 +125,14 @@ const Chip = memo(function Chip({ pr, colors }: { pr: PullRequest; colors: Color
         #{pr.number}
         {STATE_WORD[pr.state]}
       </Text>
+      <BadgeRow list={list} />
+    </Pressable>
+  );
+});
+
+function BadgeRow({ list }: { list: Badge[] }) {
+  return (
+    <>
       {list.map((badge) => (
         <View key={badge.label} style={{ flexDirection: "row", alignItems: "center", gap: 2, marginLeft: 2 }}>
           <Icon name={badge.icon} size={11} color={badge.color} />
@@ -130,9 +141,19 @@ const Chip = memo(function Chip({ pr, colors }: { pr: PullRequest; colors: Color
           ) : null}
         </View>
       ))}
-    </Pressable>
+    </>
   );
-});
+}
+
+/** CI, conflict and review badges, as on workspace PR chips, for any PR-like item. */
+export function PullRequestBadges({ pr, colors }: { pr: BadgeSource; colors: Colors }) {
+  const list = badges(pr, colors);
+  return list.length ? (
+    <View accessibilityLabel={list.map((badge) => badge.label).join(", ")} style={{ flexDirection: "row", alignItems: "center" }}>
+      <BadgeRow list={list} />
+    </View>
+  ) : null;
+}
 
 /** Every PR the workspace opened, current branch first, then open, then newest. */
 export function PullRequestLine({ workspaceId, colors }: { workspaceId: string; colors: Colors }) {

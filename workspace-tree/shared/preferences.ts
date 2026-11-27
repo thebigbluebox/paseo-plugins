@@ -51,3 +51,18 @@ export const treeFilter = defineSettings({
     projects: z.array(z.string()).default([]),
   }),
 });
+
+/**
+ * What the Reviews panel lists. Repositories are stored as the hidden ones ("owner/name"), so a
+ * repository seen for the first time shows. Kept on the host so every device lists the same.
+ */
+export const reviewSettings = defineSettings({
+  id: "review-settings",
+  scope: "host",
+  version: 1,
+  schema: z.object({
+    hiddenRepos: z.array(z.string()).default([]),
+    showDrafts: z.boolean().default(true),
+    showReapprovals: z.boolean().default(true),
+  }),
+});

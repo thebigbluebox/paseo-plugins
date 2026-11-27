@@ -1,6 +1,5 @@
 import type { WorkspaceIndicator } from "@getpaseo/plugin";
 import {
-  useHosts,
   useSettings,
   useWorkspace,
   useWorkspaces,
@@ -10,8 +9,7 @@ import {
 } from "@getpaseo/plugin/client";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { treeFilter, treeLayout, treeParents } from "../shared/preferences";
-import { FilterBar, type FilterOption, type TreeFilterValue } from "./filter";
+import { treeLayout, treeParents } from "../shared/preferences";
 import {
   DragController,
   useDragHandlers,
@@ -629,43 +627,15 @@ function SettingsProblem({
   );
 }
 
-const NO_FILTER: TreeFilterValue = { hosts: [], projects: [] };
-
 export function WorkspaceTree(view: PluginSidebarViewProps) {
   const layoutSettings = useSettings(treeLayout);
   const parentSettings = useSettings(treeParents);
-  const filterSettings = useSettings(treeFilter);
-  const filterSync = useSyncedSettings(filterSettings);
-  const filter: TreeFilterValue = filterSync.value ?? NO_FILTER;
   const controller = useRef(new DragController()).current;
-  // Every project on the hosts shown; the project filter then picks from these.
-  const hostGroups = useWorkspaces({
-    hosts: filter.hosts.length ? filter.hosts : undefined,
+  const groups = useWorkspaces({
     where: (workspace) => !workspace.background && !workspace.archivingAt,
     orderBy: ["createdAt", "desc"],
     groupBy: (workspace) => ({ key: workspace.project.key, title: workspace.projectDisplayName }),
   });
-  const groups = useMemo(
-    () => (filter.projects.length ? hostGroups.filter((group) => filter.projects.includes(group.key)) : hostGroups),
-    [hostGroups, filter.projects],
-  );
-  const hosts = useHosts();
-  const hostOptions = useMemo<FilterOption[]>(
-    () => hosts.map((host) => ({ key: host.serverId, label: host.label })),
-    [hosts],
-  );
-  const projectOptions = useMemo<FilterOption[]>(() => {
-    const titles = new Map<string, number>();
-    for (const group of hostGroups) titles.set(group.title ?? "", (titles.get(group.title ?? "") ?? 0) + 1);
-    const hostLabel = new Map(hosts.map((host) => [host.serverId, host.label]));
-    return hostGroups.map((group) => {
-      const title = group.title ?? "Workspaces";
-      // The same repository on two hosts reads the same; name the host to tell them apart.
-      const host = group.items[0]?.hostId;
-      const twin = (titles.get(group.title ?? "") ?? 0) > 1 && host ? hostLabel.get(host) : undefined;
-      return { key: group.key, label: twin ? `${title} · ${twin}` : title };
-    });
-  }, [hostGroups, hosts]);
   const refs = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const { parents: recorded, ready: parentsReady } = useParents(refs);
 
@@ -797,25 +767,13 @@ export function WorkspaceTree(view: PluginSidebarViewProps) {
   // not jump into place. After that keep drawing the last known tree: a settings reload (a save
   // retry, a reconnect) used to blank the whole view for a moment.
   const loaded = useRef(false);
-  if (
-    layoutSettings.status !== "loading" &&
-    parentSettings.status !== "loading" &&
-    filterSettings.status !== "loading" &&
-    parentsReady
-  ) {
+  if (layoutSettings.status !== "loading" && parentSettings.status !== "loading" && parentsReady) {
     loaded.current = true;
   }
   if (!loaded.current) return null;
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 4 }}>
-      <FilterBar
-        value={filter}
-        onChange={filterSync.set}
-        hosts={hostOptions}
-        projects={projectOptions}
-        colors={view.theme.colors}
-      />
       <PickBanner context={context} placements={placements} overrides={overrides} restore={restore} />
       <SettingsProblem
         what="workspace moves"
@@ -831,7 +789,7 @@ export function WorkspaceTree(view: PluginSidebarViewProps) {
       />
       {groups.length === 0 ? (
         <Text style={{ color: view.theme.colors.foregroundMuted, fontSize: 12, padding: 12 }}>
-          {filter.hosts.length || filter.projects.length ? "No workspaces match the filter." : "No workspaces yet."}
+          No workspaces yet.
         </Text>
       ) : null}
       {groups.map((group, index) => (

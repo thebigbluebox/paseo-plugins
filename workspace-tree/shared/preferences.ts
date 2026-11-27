@@ -35,19 +35,3 @@ export const parentsCache = defineSettings({
     parents: z.record(z.string(), z.string().nullable()).default({}),
   }),
 });
-
-/**
- * Which hosts and projects the tree shows. Empty lists show everything. A view choice, so it
- * stays on this device: a phone can show one project while the desktop shows all.
- */
-export const treeFilter = defineSettings({
-  id: "tree-filter",
-  scope: "device",
-  version: 1,
-  schema: z.object({
-    /** Host server IDs. */
-    hosts: z.array(z.string()).default([]),
-    /** Project keys. */
-    projects: z.array(z.string()).default([]),
-  }),
-});

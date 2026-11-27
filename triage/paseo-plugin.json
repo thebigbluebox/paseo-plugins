@@ -1,0 +1,9 @@
+{
+  "id": "paseo-triage",
+  "name": "Triage",
+  "description": "A deck of cards for every agent that needs you: read, reply, allow, or skip",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.16.0"
+  }
+}

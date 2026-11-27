@@ -11,18 +11,30 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Keyboard, Platform, Pressable, ScrollView as NativeScrollView, Text, View, type TextInput as NativeTextInput } from "react-native";
 import { overlay, reasonColor } from "./colors";
-import { useParentWorkspace, useTask } from "./lineage";
+import { isInjected, useParentWorkspace, useTask } from "./lineage";
 import { deck, type Family, type Member } from "./queue";
 import { replyTarget } from "./reply";
 import { listenForKeys } from "./web";
 
 type Colors = PluginTheme["colors"];
 
+interface Said {
+  from: "you" | "agent";
+  text: string;
+}
+
 interface CardDetail {
   permission: AgentPermissionRequest | null;
   lastError: string | null;
   message: string | null;
+  /** The recent conversation, oldest first: your messages and the agent's replies. */
+  transcript: Said[];
 }
+
+/** Recent history to fetch, in timeline entries (tool calls included), extended to whole turns. */
+const HISTORY_ENTRIES = 80;
+/** Messages shown above the latest reply, so a short reply sits under what led to it. */
+const TRANSCRIPT_MESSAGES = 10;
 
 /** The latest turn's last message, plus the pending permission or error. */
 function useCardDetail(ref: AgentRef, activity: string | null) {
@@ -34,16 +46,25 @@ function useCardDetail(ref: AgentRef, activity: string | null) {
       const handle = paseo.agents.ref(ref);
       const [refreshed, timeline] = await Promise.all([
         handle.refresh(),
-        handle.timeline.refetch({ direction: "tail", limit: 1, wholeTurns: true }),
+        handle.timeline.refetch({ direction: "tail", limit: HISTORY_ENTRIES, wholeTurns: true }),
       ]);
       const items: AgentTimelineItem[] = timeline.entries.map((entry) => entry.item);
       const message = items.findLast((item) => item.type === "assistant_message");
       const error = items.findLast((item) => item.type === "error");
       const agent = refreshed?.agent;
+      const transcript: Said[] = [];
+      for (const item of items) {
+        if (item.type === "user_message" && item.text.trim() && !isInjected(item.text)) {
+          transcript.push({ from: "you", text: item.text.trim() });
+        } else if (item.type === "assistant_message" && item.text.trim()) {
+          transcript.push({ from: "agent", text: item.text });
+        }
+      }
       return {
         permission: agent?.pendingPermissions?.at(-1) ?? null,
         lastError: agent?.lastError ?? (error?.type === "error" ? error.message : null),
         message: message?.type === "assistant_message" ? message.text : null,
+        transcript: transcript.slice(-TRANSCRIPT_MESSAGES),
       };
     },
   });
@@ -510,7 +531,28 @@ function AgentPane({ member, family, view, onMove, canSkip }: PaneProps) {
           </Body>
         ) : message ? (
           <Body from="end">
-            <Markdown>{message}</Markdown>
+            {(detail.data?.transcript.length ? detail.data.transcript : [{ from: "agent" as const, text: message }]).map(
+              (said, index) =>
+                said.from === "you" ? (
+                  // Your messages as small bubbles on the right, as in a chat.
+                  <View key={index} style={{ alignItems: "flex-end", marginLeft: 48, marginVertical: 4 }}>
+                    <View
+                      style={{
+                        paddingHorizontal: 12,
+                        paddingVertical: 8,
+                        borderRadius: 12,
+                        backgroundColor: overlay(colors.foreground, 0.07),
+                      }}
+                    >
+                      <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 19 }} selectable>
+                        {said.text}
+                      </Text>
+                    </View>
+                  </View>
+                ) : (
+                  <Markdown key={index}>{said.text}</Markdown>
+                ),
+            )}
           </Body>
         ) : detail.data ? (
           <Text style={muted}>No message in the latest turn.</Text>

@@ -41,14 +41,14 @@ export function useParentWorkspace(workspace: WorkspaceRef | null) {
  * subagent's report (`<agent-message …>`), a system reminder, a slash command's expansion. They
  * open with a markup tag, which a real prompt practically never does.
  */
-function isInjected(text: string): boolean {
+export function isInjected(text: string): boolean {
   return /^\s*<[a-zA-Z][\w-]*[\s>]/.test(text);
 }
 
 export function useTask(agent: AgentRef) {
   const paseo = usePaseo();
   return useQuery({
-    queryKey: ["triage-task", 2, agent.key],
+    queryKey: ["triage-task", 3, agent.key],
     staleTime: Infinity,
     queryFn: async (): Promise<string | null> => {
       const timeline = paseo.agents.ref(agent).timeline;
@@ -60,9 +60,12 @@ export function useTask(agent: AgentRef) {
         const before = await timeline.refetch({ direction: "before", cursor: start.startCursor, limit: 5 });
         items = [...before.entries.map((entry) => entry.item), ...items];
       }
-      // The first prompt the user actually wrote; none found means no Task line.
+      // The first prompt the user actually wrote, if it says enough to name the work: a bare
+      // "yes" or "go ahead" does not. None found means no Task line.
       for (const item of items) {
-        if (item.type === "user_message" && item.text.trim() && !isInjected(item.text)) return item.text.trim();
+        if (item.type !== "user_message" || isInjected(item.text)) continue;
+        const text = item.text.trim();
+        if (text.split(/\s+/).length >= 3) return text;
       }
       return null;
     },
